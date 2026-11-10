@@ -1,0 +1,8 @@
+{
+  "name": "subly",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Subly: dine abonnementer, samlet.",
+  "engines": { "node": ">=20" }
+}
