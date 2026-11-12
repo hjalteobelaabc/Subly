@@ -6,7 +6,7 @@ const ASK = (service) => `Find de aktuelle abonnementsplaner og priser i Danmark
 Brug helst tjenestens egen danske side. Svar KUN med ét JSON-objekt i dette format:
 {"found": true, "service": "Officielt navn", "category": "Streaming", "url": "https://kilde", "plans": [{"name": "Plan", "price": 129, "cycle": "monthly"}]}
 Regler:
-- "category" er én af: Streaming, Musik, Software, Sundhed, Andet.
+- "category" er én af: Streaming, Musik, Software, Gaming, Sundhed, Mobil og internet, Forsikring og økonomi, Nyheder, Andet.
 - "cycle" er "monthly", "quarterly" eller "yearly".
 - "price" er prisen i danske kroner som tal. Kender du ikke prisen sikkert, så brug null.
 - Højst 8 planer.
