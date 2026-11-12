@@ -53,3 +53,74 @@ export function parseJson(text) {
   if (a >= 0 && b > a) { try { return JSON.parse(text.slice(a, b + 1)); } catch {} }
   return null;
 }
+
+// ---------- Database (Upstash Redis via REST). Nøglerne sættes af Vercel, aldrig i koden. ----------
+import crypto from "node:crypto";
+
+const RURL = () => process.env.KV_REST_API_URL || process.env.UPSTASH_REDIS_REST_URL || "";
+const RTOK = () => process.env.KV_REST_API_TOKEN || process.env.UPSTASH_REDIS_REST_TOKEN || "";
+export const dbReady = () => Boolean(RURL() && RTOK());
+
+export async function redis(...cmd) {
+  const r = await fetch(RURL(), {
+    method: "POST",
+    headers: { Authorization: `Bearer ${RTOK()}`, "Content-Type": "application/json" },
+    body: JSON.stringify(cmd),
+    signal: AbortSignal.timeout(8000),
+  });
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok || j.error) throw new Error("db_error");
+  return j.result;
+}
+
+// Begrænsning der virker på tværs af serverinstanser (bruges til login).
+export async function tooMany(key, max, seconds) {
+  const n = await redis("INCR", `rl:${key}`);
+  if (n === 1) await redis("EXPIRE", `rl:${key}`, seconds);
+  return n > max;
+}
+
+export const ip = (req) => String(req.headers["x-forwarded-for"] || "").split(",")[0].trim() || "ukendt";
+export const sha = (s) => crypto.createHash("sha256").update(String(s)).digest("hex");
+export const randomId = (bytes = 32) => crypto.randomBytes(bytes).toString("base64url");
+
+// ---------- Adgangskoder: scrypt med salt. Selve adgangskoden gemmes aldrig. ----------
+export function hashPassword(pw) {
+  const salt = crypto.randomBytes(16);
+  const key = crypto.scryptSync(pw, salt, 64, { N: 16384, r: 8, p: 1, maxmem: 64 * 1024 * 1024 });
+  return `scrypt$${salt.toString("base64")}$${key.toString("base64")}`;
+}
+export function checkPassword(pw, stored) {
+  const [alg, salt, key] = String(stored || "").split("$");
+  if (alg !== "scrypt" || !salt || !key) { crypto.scryptSync(pw, "x", 64); return false; }
+  const want = Buffer.from(key, "base64");
+  const got = crypto.scryptSync(pw, Buffer.from(salt, "base64"), want.length, { N: 16384, r: 8, p: 1, maxmem: 64 * 1024 * 1024 });
+  return crypto.timingSafeEqual(want, got);
+}
+
+// ---------- Sessioner: tilfældigt ID i en HttpOnly-cookie. I databasen ligger kun en hash af ID'et. ----------
+const COOKIE = "subly_sid";
+const SESSION_DAYS = 30;
+export function readCookie(req, name = COOKIE) {
+  const m = String(req.headers.cookie || "").split(/;\s*/).find(c => c.startsWith(name + "="));
+  return m ? decodeURIComponent(m.slice(name.length + 1)) : "";
+}
+export async function startSession(res, userId) {
+  const sid = randomId();
+  await redis("SET", `sess:${sha(sid)}`, userId, "EX", SESSION_DAYS * 86400);
+  res.setHeader("Set-Cookie", `${COOKIE}=${sid}; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=${SESSION_DAYS * 86400}`);
+}
+export async function endSession(req, res) {
+  const sid = readCookie(req);
+  if (sid) await redis("DEL", `sess:${sha(sid)}`).catch(() => {});
+  res.setHeader("Set-Cookie", `${COOKIE}=; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=0`);
+}
+export async function currentUser(req) {
+  const sid = readCookie(req);
+  if (!sid || sid.length > 100) return null;
+  const id = await redis("GET", `sess:${sha(sid)}`);
+  if (!id) return null;
+  const raw = await redis("GET", `user:${id}`);
+  return raw ? JSON.parse(raw) : null;
+}
+export const publicUser = (u) => u && ({ id: u.id, email: u.email || "", name: u.name || "", provider: u.provider, created: u.created });
